@@ -1,0 +1,81 @@
+name: Build Releases
+
+# This workflow runs when any of the following occur:
+# - A tag with semantic versioning is created by an actor
+# - A workflow is manually triggered by an actor
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (MSYS2)
+    runs-on: windows-latest
+    if: ${{ github.actor == 'bitst0rm' }}
+
+    strategy:
+      matrix:
+        include:
+          - msystem: MINGW32
+            arch: x32
+          - msystem: MINGW64
+            arch: x64
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          install: >-
+            msys/gcc
+            make
+
+      - name: Install GCC
+        run: pacman --noconfirm -S ${MINGW_PACKAGE_PREFIX}-gcc
+
+      - name: Configure Project
+        run: CXX=g++ ./configure
+
+      - name: Build Project
+        run: make
+
+      - name: Install Binaries
+        run: make install PREFIX=dist
+
+      - name: Extract Version from Git Tag
+        run: |
+          # This strips the git ref prefix from the version.
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+          # This strips the "v" prefix from the tag name.
+          [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
+          # Set the version number as an environment variable
+          echo "rls_version=$VERSION" >> $GITHUB_ENV
+
+      - name: Set Release Name
+        run: echo "rls_name=winpty-${{ env.rls_version }}-msys2-mingw-w64-win_${{ matrix.arch }}" >> $GITHUB_ENV
+
+      - name: Create Tarball
+        run: tar -czvf ${{ env.rls_name }}.tar.gz -C . dist --transform "s/^dist/${{ env.rls_name }}/"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.rls_name }}
+          path: dist
+
+      - name: Upload Binaries to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ env.rls_name }}.tar.gz
+          asset_name: ${{ env.rls_name }}.tar.gz
+          tag: ${{ github.ref }}
+          overwrite: false
